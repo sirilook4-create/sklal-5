@@ -150,6 +150,46 @@ export interface UnitBalanceMismatchRow {
   unit_count: number
 }
 
+export interface UnitHistoryUnit {
+  id: string
+  code: string
+  item_id: number
+  item_name: string
+  status: UnitStatus
+  location: string
+  owner_apartment: string | null
+  unit_cost: number | null
+  created_at: string
+}
+
+export interface UnitHistoryEvent {
+  at: string
+  event: string
+  from_location: string | null
+  to_location: string | null
+  doc_number: string | null
+  move_id: number | null
+  note: string | null
+}
+
+export interface UnitHistoryReport {
+  unit: UnitHistoryUnit
+  events: UnitHistoryEvent[]
+}
+
+export interface OwnerUnitRow {
+  unit_id: string
+  code: string
+  item_id: number
+  item_name: { name: string; name_en: string | null; name_ar: string | null }
+  status: UnitStatus
+  location: string
+  apartment: string
+  unit_cost: number | null
+  created_at: string
+  last_event_at: string | null
+}
+
 export interface Contact {
   id: number
   group_name: string | null
