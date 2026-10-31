@@ -42,9 +42,11 @@ begin
     values (v_item, 'ZZR-1', 'in_stock', v_wh, 10) returning id into v_u1;
   select count(*) into v_cnt from unit_balance_mismatch where item_id = v_item;
   rep := rep || pg_temp.r('R3a единица без остатка показана как расхождение', v_cnt = 1);
-  perform post_move(p_op => 'receipt', p_item => v_item, p_qty => 1, p_unit_cost => 10);
+  delete from item_units where id = v_u1;
+  perform post_move(p_op => 'receipt', p_item => v_item, p_qty => 1, p_unit_cost => 10, p_serials => array['ZZR-1']);
+  select id into v_u1 from item_units where code = 'ZZR-1';
   select count(*) into v_cnt from unit_balance_mismatch where item_id = v_item;
-  rep := rep || pg_temp.r('R3b после прихода расхождения нет', v_cnt = 0);
+  rep := rep || pg_temp.r('R3b после прихода с кодом ZZR-1 расхождения нет', v_cnt = 0);
 
   -- R4 статус issued считается как наличие на локации
   update item_units set status = 'issued' where id = v_u1;
@@ -72,7 +74,7 @@ begin
     values (v_u1, 'issue', v_wh, v_apt_loc, 'второй', '2026-01-02 10:00+00');
   v_h := report_unit_history(v_u1);
   rep := rep || pg_temp.r('R6a история: код и статус единицы', v_h->'unit'->>'code' = 'ZZR-1' and v_h->'unit'->>'status' = 'issued' and v_h->'unit'->>'item_name' = 'ZZ R');
-  rep := rep || pg_temp.r('R6b история: два события в порядке времени', jsonb_array_length(v_h->'events') = 2 and v_h->'events'->0->>'event' = 'receipt' and v_h->'events'->1->>'event' = 'issue' and v_h->'events'->1->>'note' = 'второй');
+  rep := rep || pg_temp.r('R6b история: три события в порядке времени (включая приход с кодом)', jsonb_array_length(v_h->'events') = 3 and v_h->'events'->0->>'event' = 'receipt' and v_h->'events'->1->>'event' = 'issue' and v_h->'events'->1->>'note' = 'второй' and v_h->'events'->2->>'event' = 'receipt');
   rep := rep || pg_temp.r('R6c история: неизвестная единица дает null', report_unit_history(gen_random_uuid()) is null);
 
   -- R7 отчёт по собственным единицам владельца

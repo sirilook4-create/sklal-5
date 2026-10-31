@@ -190,6 +190,12 @@ export interface OwnerUnitRow {
   last_event_at: string | null
 }
 
+export interface EnableUnitTrackingResult {
+  item_id: number
+  units_created: number
+  by_location: Array<{ location: string; qty: number }>
+}
+
 export interface Contact {
   id: number
   group_name: string | null

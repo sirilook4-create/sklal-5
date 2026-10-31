@@ -39,8 +39,8 @@ begin
   rep := rep || pg_temp.r('U2 включение при app.unit_tracking_enable=on проходит', (select track_units from items where id = v_item));
 
   -- U3 выключение при наличии единиц отклонено
-  insert into item_units(item_id, code, status, location_id, unit_cost)
-    values (v_item, 'ZZU-1', 'in_stock', v_wh, 10) returning id into v_unit;
+  perform post_move(p_op => 'receipt', p_item => v_item, p_qty => 1, p_unit_cost => 10, p_serials => array['ZZU-1']);
+  select id into v_unit from item_units where code = 'ZZU-1';
   v_rej := false;
   begin
     update items set track_units = false where id = v_item;
@@ -48,9 +48,9 @@ begin
   end;
   rep := rep || pg_temp.r('U3 true->false при наличии единиц отклонено', v_rej);
 
-  -- U4 приход проходит, выдача/списание/перемещение блокируются защитным триггером
+  -- U4 приход без кодов проходит и создаёт единицу, выдача/списание/перемещение блокируются защитным триггером
   perform post_move(p_op => 'receipt', p_item => v_item, p_qty => 1, p_unit_cost => 10);
-  rep := rep || pg_temp.r('U4 приход (receipt) проходит', (select qty from stock_balance where loc_id = v_wh and item_id = v_item) = 1);
+  rep := rep || pg_temp.r('U4 приход (receipt) проходит', (select qty from stock_balance where loc_id = v_wh and item_id = v_item) = 2);
 
   v_msg := '';
   begin
