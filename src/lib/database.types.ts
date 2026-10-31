@@ -108,12 +108,46 @@ export interface Item {
   note: string | null
   default_cost: number | null
   track_on_hand: boolean
+  track_units: boolean
   qr_code: string | null
   photo_path: string | null
   active: boolean
   sort: number
   supplier_id: number | null
   tenant_coef: number | null
+}
+
+export type UnitStatus = 'in_stock' | 'issued' | 'written_off' | 'lost'
+
+export interface ItemUnit {
+  id: string
+  item_id: number
+  code: string
+  status: UnitStatus
+  location_id: number
+  owner_apartment_id: number | null
+  unit_cost: number | null
+  created_at: string
+}
+
+export interface UnitEvent {
+  id: number
+  unit_id: string
+  event: string
+  from_loc: number | null
+  to_loc: number | null
+  doc_id: string | null
+  move_id: number | null
+  note: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export interface UnitBalanceMismatchRow {
+  item_id: number
+  loc_id: number
+  balance_qty: number
+  unit_count: number
 }
 
 export interface Contact {
