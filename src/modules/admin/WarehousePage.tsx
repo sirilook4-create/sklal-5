@@ -80,6 +80,7 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
   const [apartmentFilter, setApartmentFilter] = useState<string>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [valuationFailed, setValuationFailed] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [moves, setMoves] = useState<StockMoveRow[]>([])
   const [movesLoading, setMovesLoading] = useState(false)
@@ -108,6 +109,7 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
           meta.set(s.item_id, { category: s.category, kind: s.kind })
         }
         const merged = mergeOwner(ownerStock, valuation ?? [], meta)
+        setValuationFailed(valuation == null)
         if (valuation == null && !quiet) toast(t.admin.stock.valuationError, 'error')
         setOwnerRows(merged)
         if (!quiet) setLoading(false)
@@ -120,6 +122,7 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
         const stock = stockRes.status === 'fulfilled' ? stockRes.value : null
         if (stock == null) { if (!quiet) setLoading(false); return }
         const merged = mergeCompany(stock, valuation ?? [])
+        setValuationFailed(valuation == null)
         if (valuation == null && !quiet) toast(t.admin.stock.valuationError, 'error')
         setRows(merged)
         if (!quiet) setLoading(false)
@@ -274,8 +277,8 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
       {showSummary && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 mb-4">
           <SummaryTile label={stock.positions} value={n(String(summary.positions))} />
-          <SummaryTile label={stock.stockValue} value={n(formatEGP(summary.totalStockValue))} />
-          <SummaryTile label={stock.potentialRevenue} value={n(formatEGP(summary.totalPotentialRevenue))} />
+          <SummaryTile label={stock.stockValue} value={valuationFailed ? '—' : n(formatEGP(summary.totalStockValue))} />
+          <SummaryTile label={stock.potentialRevenue} value={valuationFailed ? '—' : n(formatEGP(summary.totalPotentialRevenue))} />
           <SummaryTile label={stock.markup} value={formatPct(summary.weightedMarkupPct)} />
           <SummaryTile label={stock.margin} value={formatPct(summary.weightedMarginPct)} />
         </div>

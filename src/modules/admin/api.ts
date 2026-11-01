@@ -1323,19 +1323,12 @@ export async function itemHasHistory(itemId: number): Promise<boolean> {
 }
 
 export async function fetchValuation(scope: 'company' | 'owner', ownerApartmentId?: number): Promise<WarehouseValuationRow[]> {
-  const rows = await fetchAllPages<WarehouseValuationRow>((from, to) => {
-    let query = supabase
-      .from('warehouse_valuation')
-      .select('scope,owner_apartment_id,item_id,on_hand,min_stock,avg_cost,guest_price,stock_value,potential_revenue,markup_pct,margin_pct')
-      .eq('scope', scope)
-    if (ownerApartmentId != null) {
-      query = query.eq('owner_apartment_id', ownerApartmentId)
-    }
-    return query
-      .order('item_id')
-      .order('owner_apartment_id', { nullsFirst: true })
-      .range(from, to)
+  const { data, error, status } = await supabase.rpc('stock_valuation', {
+    p_scope: scope,
+    p_owner_apartment: ownerApartmentId ?? null,
   })
+  if (error) throw toApiError(error, status)
+  const rows = (data as unknown as WarehouseValuationRow[]) ?? []
   return rows.map((r) => ({
     ...r,
     on_hand: Number(r.on_hand),
