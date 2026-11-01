@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock, fetchValuation, setGuestPrice } from '@/modules/admin/api'
+import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock, fetchValuation, setGuestPrice, setItemCost } from '@/modules/admin/api'
 import type { StockMoveRow, WarehouseValuationRow, ItemKind } from '@/lib/database.types'
 import { useI18n } from '@/i18n'
 import { formatQty, formatDateTime, formatEGP } from '@/lib/format'
@@ -12,7 +12,7 @@ import { ErrorState } from '@/components/ErrorState'
 import { useCatalogName } from '@/modules/core/useCatalogName'
 import { mergeCompany, mergeOwner, type MergedStockRow, type MergedOwnerRow } from './stockRows'
 import { summarize, formatPct } from './stockMetrics'
-import { parseGuestPrice } from './guestPrice'
+import { parseGuestPrice, parseCost } from './guestPrice'
 
 type KindFilter = 'all' | 'assets' | 'consumables'
 type StockTab = 'company' | 'owner'
@@ -30,6 +30,103 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
     <div className="bg-surface border border-line rounded-xl px-3 py-2.5">
       <div className="text-xs text-muted mb-0.5">{label}</div>
       <div className="text-sm font-semibold text-ink">{value}</div>
+    </div>
+  )
+}
+
+interface SetCostTarget {
+  itemId: number
+  itemName: string
+  apartmentId?: number
+  code?: string
+}
+
+function SetCostModal({
+  target, scope, labels, onClose, onApplied,
+}: {
+  target: SetCostTarget
+  scope: 'company' | 'owner'
+  labels: {
+    apply: string
+    cancel: string
+    explanation: string
+    note: string
+    scopeLabel: string
+    invalidCost: string
+  }
+  onClose: () => void
+  onApplied: (result: { avg_cost_after: number | null }) => void
+}) {
+  const [input, setInput] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const handleApply = async () => {
+    if (saving) return
+    const parsed = parseCost(input)
+    if (!parsed.ok || parsed.value == null) {
+      toast(labels.invalidCost, 'error')
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await setItemCost(target.itemId, parsed.value, note.trim() || null, scope === 'owner' ? target.apartmentId : undefined)
+      onApplied(result)
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="bg-surface border border-line rounded-xl p-4 mx-4 max-w-sm w-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-sm font-semibold text-ink mb-1">{target.itemName}</div>
+        <div className="text-xs text-muted mb-3">{labels.scopeLabel}</div>
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleApply() } if (e.key === 'Escape') onClose() }}
+          inputMode="decimal"
+          disabled={saving}
+          placeholder="0"
+          className="w-full bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-2"
+        />
+        <p className="text-xs text-muted mb-3">{labels.explanation}</p>
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          disabled={saving}
+          placeholder={labels.note}
+          className="w-full bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-3"
+        />
+        <div className="flex gap-2 justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="min-h-[44px] px-4 rounded-lg text-sm font-medium bg-surface border border-line text-muted disabled:opacity-50"
+          >
+            {labels.cancel}
+          </button>
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={saving}
+            className="min-h-[44px] px-4 rounded-lg text-sm font-medium bg-accent text-white disabled:opacity-50"
+          >
+            {labels.apply}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -179,6 +276,7 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const belowOnly = searchParams.get('below') === '1'
   const noGuestPrice = searchParams.get('noprice') === '1'
+  const [costTarget, setCostTarget] = useState<SetCostTarget | null>(null)
 
   const isOwner = scope === 'owner'
 
@@ -228,6 +326,20 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
     toast(t.admin.stock.priceSaved, 'success')
     loadData(true)
   }, [loadData, t])
+
+  const handleCostApplied = useCallback((result: { avg_cost_after: number | null }) => {
+    toast(t.admin.stock.costApplied.replace('{{cost}}', result.avg_cost_after != null ? n(formatEGP(result.avg_cost_after)) : '—'), 'success')
+    setCostTarget(null)
+    loadData(true)
+  }, [loadData, t, n])
+
+  const costModalLabels = useMemo(() => ({
+    apply: t.admin.stock.apply,
+    cancel: t.admin.stock.cancel,
+    explanation: t.admin.stock.costExplanation,
+    note: t.admin.stock.costNote,
+    invalidCost: t.admin.stock.invalidCost,
+  }), [t])
 
   const formatGuestPriceDisplay = (v: number | null) =>
     v != null && v > 0 ? n(formatEGP(v)) : '—'
@@ -492,8 +604,12 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
                               </>
                             )}
                           </td>
-                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
-                            {itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink" onClick={(e) => e.stopPropagation()}>
+                            {itemRow.avg_cost != null
+                              ? n(formatEGP(itemRow.avg_cost))
+                              : itemRow.qty > 0
+                                ? <button type="button" onClick={() => setCostTarget({ itemId: item.item_id, itemName: cat.itemName(itemRow.name), apartmentId: isOwner ? (item as MergedOwnerRow).apartment_id : undefined, code: isOwner ? (item as MergedOwnerRow).code : undefined })} className="text-xs text-accent hover:underline">{stock.setCost}</button>
+                                : '—'}
                           </td>
                           <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                             <GuestPriceCell
@@ -593,9 +709,15 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                        <div className="flex justify-between">
+                        <div className="flex justify-between items-center" onClick={(e) => e.stopPropagation()}>
                           <span className="text-muted">{stock.avgCost}</span>
-                          <span className="text-ink">{itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}</span>
+                          <span className="text-ink">
+                            {itemRow.avg_cost != null
+                              ? n(formatEGP(itemRow.avg_cost))
+                              : itemRow.qty > 0
+                                ? <button type="button" onClick={() => setCostTarget({ itemId: item.item_id, itemName: cat.itemName(itemRow.name), apartmentId: isOwner ? (item as MergedOwnerRow).apartment_id : undefined, code: isOwner ? (item as MergedOwnerRow).code : undefined })} className="text-xs text-accent hover:underline">{stock.setCost}</button>
+                                : '—'}
+                          </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted">{stock.markup}</span>
@@ -665,6 +787,21 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
           </div>
         )}
       </div>
+
+      {costTarget && (
+        <SetCostModal
+          target={costTarget}
+          scope={scope}
+          labels={{
+            ...costModalLabels,
+            scopeLabel: costTarget.code != null
+              ? t.admin.stock.costModalOwner.replace('{{code}}', costTarget.code)
+              : t.admin.stock.costModalCompany,
+          }}
+          onClose={() => setCostTarget(null)}
+          onApplied={handleCostApplied}
+        />
+      )}
     </>
   )
 }

@@ -41,6 +41,7 @@ import type {
   WarehouseValuationRow,
   TransferDirection,
   TransferLine,
+  SetItemCostResult,
 } from '@/lib/database.types'
 
 // ---- Queries ----
@@ -1348,6 +1349,22 @@ export async function setGuestPrice(itemId: number, price: number | null): Promi
     .from('item_prices')
     .upsert({ item_id: itemId, guest_price: price ?? 0 }, { onConflict: 'item_id' })
   if (error) throw toApiError(error, status)
+}
+
+export async function setItemCost(
+  itemId: number,
+  cost: number,
+  note?: string | null,
+  ownerApartmentId?: number,
+): Promise<SetItemCostResult> {
+  const { data, error, status } = await supabase.rpc('set_item_cost', {
+    p_item: itemId,
+    p_cost: cost,
+    p_note: note ?? null,
+    p_owner_apartment: ownerApartmentId ?? null,
+  })
+  if (error) throw toApiError(error, status)
+  return data as unknown as SetItemCostResult
 }
 
 export async function transferCompanyOwner(

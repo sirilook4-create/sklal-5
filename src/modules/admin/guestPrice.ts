@@ -17,3 +17,14 @@ export function parseGuestPrice(input: string): ParseResult {
   if (num > 1e9) return { ok: false }
   return { ok: true, value: Math.round(num * 100) / 100 }
 }
+
+// Like parseGuestPrice, but a cost is required: empty string is invalid.
+// Zero is a valid cost.
+export function parseCost(input: string): ParseResult {
+  const trimmed = toAsciiDigits(input.trim())
+  if (trimmed === '') return { ok: false }
+  if (!/^\d+([.,]\d{1,2})?$/.test(trimmed)) return { ok: false }
+  const num = Number(trimmed.replace(',', '.'))
+  if (num > 1e9) return { ok: false }
+  return { ok: true, value: Math.round(num * 100) / 100 }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseGuestPrice } from './guestPrice'
+import { parseGuestPrice, parseCost } from './guestPrice'
 
 describe('parseGuestPrice', () => {
   it('empty string returns null', () => {
@@ -86,5 +86,35 @@ describe('parseGuestPrice', () => {
 
   it('accepts comma with spaces', () => {
     expect(parseGuestPrice('  12,5  ')).toEqual({ ok: true, value: 12.5 })
+  })
+})
+
+describe('parseCost', () => {
+  it('empty string is invalid', () => {
+    expect(parseCost('')).toEqual({ ok: false })
+  })
+
+  it('spaces only is invalid', () => {
+    expect(parseCost('   ')).toEqual({ ok: false })
+  })
+
+  it('accepts zero', () => {
+    expect(parseCost('0')).toEqual({ ok: true, value: 0 })
+  })
+
+  it('accepts integer', () => {
+    expect(parseCost('150')).toEqual({ ok: true, value: 150 })
+  })
+
+  it('accepts decimal with comma', () => {
+    expect(parseCost('12,5')).toEqual({ ok: true, value: 12.5 })
+  })
+
+  it('rejects ambiguous thousands separators', () => {
+    expect(parseCost('1,500')).toEqual({ ok: false })
+  })
+
+  it('accepts Arabic-Indic digits', () => {
+    expect(parseCost('\u0661\u0665\u0660')).toEqual({ ok: true, value: 150 })
   })
 })
