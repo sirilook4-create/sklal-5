@@ -31,7 +31,12 @@ export function toast(message: string, kind?: Toast['kind']) {
 }
 
 export function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e ?? '')
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object') {
+    const message = (e as { message?: unknown }).message
+    if (typeof message === 'string' && message) return message
+  }
+  return String(e ?? '')
 }
 
 export function edgeError(data: unknown, error: unknown): Error {
