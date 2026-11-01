@@ -48,7 +48,7 @@ begin
   end;
   rep := rep || pg_temp.r('U3 true->false при наличии единиц отклонено', v_rej);
 
-  -- U4 приход без кодов проходит и создаёт единицу, выдача/списание/перемещение блокируются защитным триггером
+  -- U4 приход без кодов проходит и создаёт единицу; выдача и списание без ID единиц отклоняются (после 1b2a), прямое перемещение блокируется защитным триггером
   perform post_move(p_op => 'receipt', p_item => v_item, p_qty => 1, p_unit_cost => 10);
   rep := rep || pg_temp.r('U4 приход (receipt) проходит', (select qty from stock_balance where loc_id = v_wh and item_id = v_item) = 2);
 
@@ -57,14 +57,14 @@ begin
     perform post_move(p_op => 'issue_apartment', p_item => v_item, p_qty => 1, p_apartment => v_apt);
   exception when others then v_msg := sqlerrm;
   end;
-  rep := rep || pg_temp.r('U5 выдача (issue) блокируется текстом "Поштучный учёт"', v_msg like '%Поштучный учёт: операция будет доступна после обновления%');
+  rep := rep || pg_temp.r('U5 выдача (issue) без ID единиц отклонена текстом "ID единиц обязательны"', v_msg like '%ID единиц обязательны%');
 
   v_msg := '';
   begin
     perform post_move(p_op => 'writeoff_warehouse', p_item => v_item, p_qty => 1);
   exception when others then v_msg := sqlerrm;
   end;
-  rep := rep || pg_temp.r('U6 списание (writeoff) блокируется текстом "Поштучный учёт"', v_msg like '%Поштучный учёт%');
+  rep := rep || pg_temp.r('U6 списание (writeoff) без ID единиц отклонено текстом "ID единиц обязательны"', v_msg like '%ID единиц обязательны%');
 
   v_msg := '';
   begin
