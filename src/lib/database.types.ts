@@ -526,6 +526,24 @@ export interface ItemPrice {
   updated_at: string
 }
 
+export interface ItemCostCorrection {
+  id: number
+  item_id: number
+  owner_apartment_id: number | null
+  unit_cost: number
+  note: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export interface SetItemCostResult {
+  item_id: number
+  owner_apartment_id: number | null
+  unit_cost: number
+  avg_cost_after: number | null
+  uncosted_qty: number
+}
+
 export interface WarehouseValuationRow {
   scope: 'company' | 'owner'
   owner_apartment_id: number | null
