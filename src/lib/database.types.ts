@@ -540,6 +540,13 @@ export interface WarehouseValuationRow {
   margin_pct: number | null
 }
 
+export type TransferDirection = 'to_owner' | 'to_company'
+
+export interface TransferLine {
+  item_id: number
+  qty: number
+}
+
 export interface TransferCompanyOwnerResult {
   doc_id: string
 }

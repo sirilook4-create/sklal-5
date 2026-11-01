@@ -38,6 +38,9 @@ import type {
   IncidentChargePreview,
   ChargeStatus,
   ChargesReportRow,
+  WarehouseValuationRow,
+  TransferDirection,
+  TransferLine,
 } from '@/lib/database.types'
 
 // ---- Queries ----
@@ -1317,4 +1320,51 @@ export async function itemHasHistory(itemId: number): Promise<boolean> {
     supabase.from('cleaning_event_lines').select('id', { head: true, count: 'exact' }).eq('item_id', itemId),
   ])
   return [moves, norms, poLines, invLines, roomNorms, roomStock, incidents, cleanLines].some((r) => (r.count ?? 0) > 0)
+}
+
+export async function fetchValuation(scope: 'company' | 'owner', ownerApartmentId?: number): Promise<WarehouseValuationRow[]> {
+  let query = supabase
+    .from('warehouse_valuation')
+    .select('scope,owner_apartment_id,item_id,on_hand,min_stock,avg_cost,guest_price,stock_value,potential_revenue,markup_pct,margin_pct')
+    .eq('scope', scope)
+    .order('item_id')
+  if (ownerApartmentId != null) {
+    query = query.eq('owner_apartment_id', ownerApartmentId)
+  }
+  const rows = await fetchAllPages<WarehouseValuationRow>((from, to) => query.range(from, to))
+  return rows.map((r) => ({
+    ...r,
+    on_hand: Number(r.on_hand),
+    min_stock: r.min_stock == null ? null : Number(r.min_stock),
+    avg_cost: r.avg_cost == null ? null : Number(r.avg_cost),
+    guest_price: r.guest_price == null ? null : Number(r.guest_price),
+    stock_value: r.stock_value == null ? null : Number(r.stock_value),
+    potential_revenue: r.potential_revenue == null ? null : Number(r.potential_revenue),
+    markup_pct: r.markup_pct == null ? null : Number(r.markup_pct),
+    margin_pct: r.margin_pct == null ? null : Number(r.margin_pct),
+  }))
+}
+
+export async function setGuestPrice(itemId: number, price: number | null): Promise<void> {
+  if (price != null && price < 0) throw toApiError(new Error('price must be >= 0'))
+  const { error, status } = await supabase
+    .from('item_prices')
+    .upsert({ item_id: itemId, guest_price: price ?? 0 }, { onConflict: 'item_id' })
+  if (error) throw toApiError(error, status)
+}
+
+export async function transferCompanyOwner(
+  direction: TransferDirection,
+  ownerApartmentId: number,
+  lines: TransferLine[],
+  note?: string | null,
+): Promise<string> {
+  const { data, error, status } = await supabase.rpc('transfer_company_owner', {
+    p_direction: direction,
+    p_owner_apartment: ownerApartmentId,
+    p_lines: lines,
+    p_note: note ?? null,
+  })
+  if (error) throw toApiError(error, status)
+  return data as unknown as string
 }
