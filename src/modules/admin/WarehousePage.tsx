@@ -1,15 +1,17 @@
 import { Fragment, useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock } from '@/modules/admin/api'
-import type { WarehouseStockRow, StockMoveRow, OwnerStockRow } from '@/lib/database.types'
+import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock, fetchValuation } from '@/modules/admin/api'
+import type { StockMoveRow, WarehouseValuationRow, ItemKind } from '@/lib/database.types'
 import { useI18n } from '@/i18n'
-import { formatQty, formatDateTime } from '@/lib/format'
+import { formatQty, formatDateTime, formatEGP } from '@/lib/format'
 import { toast, errorMessage } from '@/lib/toast'
 import { useLiveRefresh } from '@/lib/realtime'
 import { Search } from 'lucide-react'
 import { OwnerBadge } from '@/components/OwnerBadge'
 import { ErrorState } from '@/components/ErrorState'
 import { useCatalogName } from '@/modules/core/useCatalogName'
+import { mergeCompany, mergeOwner, type MergedStockRow, type MergedOwnerRow } from './stockRows'
+import { summarize, formatPct } from './stockMetrics'
 
 type KindFilter = 'all' | 'assets' | 'consumables'
 type StockTab = 'company' | 'owner'
@@ -19,6 +21,15 @@ function ProgressBar({ value, color }: { value: number; color: string }) {
     <span className="block h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--line)' }}>
       <span className="block h-full rounded-full" style={{ width: `${Math.min(value, 100)}%`, background: color }} />
     </span>
+  )
+}
+
+function SummaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-surface border border-line rounded-xl px-3 py-2.5">
+      <div className="text-xs text-muted mb-0.5">{label}</div>
+      <div className="text-sm font-semibold text-ink">{value}</div>
+    </div>
   )
 }
 
@@ -53,65 +64,150 @@ export function WarehousePage() {
         </button>
       </div>
 
-      {tab === 'company' ? <CompanyStock /> : <OwnerStock />}
+      <StockView scope={tab} />
     </div>
   )
 }
 
-function CompanyStock() {
+function StockView({ scope }: { scope: 'company' | 'owner' }) {
   const { t, n } = useI18n()
   const cat = useCatalogName()
-  const [stock, setStock] = useState<WarehouseStockRow[]>([])
+  const [rows, setRows] = useState<MergedStockRow[]>([])
+  const [ownerRows, setOwnerRows] = useState<MergedOwnerRow[]>([])
   const [search, setSearch] = useState('')
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [apartmentFilter, setApartmentFilter] = useState<string>('all')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [moves, setMoves] = useState<StockMoveRow[]>([])
   const [movesLoading, setMovesLoading] = useState(false)
   const [movesOffset, setMovesOffset] = useState(0)
   const [hasMoreMoves, setHasMoreMoves] = useState(false)
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const belowOnly = searchParams.get('below') === '1'
+  const noGuestPrice = searchParams.get('noprice') === '1'
 
-  const loadStock = useCallback((silent?: boolean) => {
+  const isOwner = scope === 'owner'
+
+  const loadData = useCallback((silent?: boolean) => {
     const quiet = silent === true
-    if (!quiet) setLoading(true)
-    fetchWarehouseStock()
-      .then((data) => setStock(data))
-      .catch((error) => { if (!quiet) toast(errorMessage(error), 'error') })
-      .finally(() => { if (!quiet) setLoading(false) })
-  }, [])
+    if (!quiet) { setLoading(true); setError(false) }
+    if (isOwner) {
+      const valPromise = fetchValuation('owner').catch((e) => { if (!quiet) toast(errorMessage(e), 'error'); return null })
+      const ownerPromise = fetchOwnerStock().catch((e) => { if (!quiet) { setError(true); toast(errorMessage(e), 'error') }; return null })
+      const stockPromise = fetchWarehouseStock().catch(() => null)
+      Promise.allSettled([valPromise, ownerPromise, stockPromise]).then(([valRes, ownerRes, stockRes]) => {
+        const valuation = valRes.status === 'fulfilled' ? valRes.value : null
+        const ownerStock = ownerRes.status === 'fulfilled' ? ownerRes.value : null
+        const warehouseStock = stockRes.status === 'fulfilled' ? stockRes.value : null
+        if (ownerStock == null) { if (!quiet) setLoading(false); return }
+        const meta = new Map<number, { category: string; kind: ItemKind }>()
+        for (const s of warehouseStock ?? []) {
+          meta.set(s.item_id, { category: s.category, kind: s.kind })
+        }
+        const merged = mergeOwner(ownerStock, valuation ?? [], meta)
+        if (valuation == null && !quiet) toast(t.admin.stock.valuationError, 'error')
+        setOwnerRows(merged)
+        if (!quiet) setLoading(false)
+      })
+    } else {
+      const valPromise = fetchValuation('company').catch((e) => { if (!quiet) toast(errorMessage(e), 'error'); return null })
+      const stockPromise = fetchWarehouseStock().catch((e) => { if (!quiet) { setError(true); toast(errorMessage(e), 'error') }; return null })
+      Promise.allSettled([valPromise, stockPromise]).then(([valRes, stockRes]) => {
+        const valuation = valRes.status === 'fulfilled' ? valRes.value : null
+        const stock = stockRes.status === 'fulfilled' ? stockRes.value : null
+        if (stock == null) { if (!quiet) setLoading(false); return }
+        const merged = mergeCompany(stock, valuation ?? [])
+        if (valuation == null && !quiet) toast(t.admin.stock.valuationError, 'error')
+        setRows(merged)
+        if (!quiet) setLoading(false)
+      })
+    }
+  }, [isOwner, t])
 
-  useEffect(() => { loadStock() }, [loadStock])
-  useLiveRefresh(['stock_moves', 'items', 'locations'], () => loadStock(true))
+  useEffect(() => { loadData() }, [loadData])
+  useLiveRefresh(['stock_moves', 'items', 'locations'], () => loadData(true))
+
+  const apartments = useMemo(() => {
+    if (!isOwner) return []
+    const map = new Map<number, string>()
+    for (const r of ownerRows) map.set(r.apartment_id, r.code)
+    return Array.from(map.entries()).map(([id, code]) => ({ id, code })).sort((a, b) => a.code.localeCompare(b.code))
+  }, [ownerRows, isOwner])
 
   const categories = useMemo(() => {
+    const src = isOwner ? ownerRows : rows
     const set = new Set<string>()
-    for (const s of stock) set.add(s.category)
+    for (const s of src) set.add(s.category)
     return Array.from(set).sort((a, b) => a.localeCompare(b))
-  }, [stock])
+  }, [rows, ownerRows, isOwner])
 
   const filtered = useMemo(() => {
-    return stock.filter((s) => {
+    const src = isOwner ? ownerRows : rows
+    return src.filter((s) => {
       if (kindFilter === 'assets' && s.kind !== 'asset') return false
       if (kindFilter === 'consumables' && s.kind !== 'consumable') return false
       if (categoryFilter !== 'all' && s.category !== categoryFilter) return false
       if (belowOnly && !s.below_min) return false
-      if (search.trim() && !cat.matches(search.trim(), s.name, 'item')) return false
+      if (noGuestPrice && s.guest_price != null && s.guest_price > 0) return false
+      if (isOwner && apartmentFilter !== 'all' && (s as MergedOwnerRow).apartment_id !== Number(apartmentFilter)) return false
+      if (search.trim()) {
+        const nameRow = s as MergedStockRow & { name: string }
+        if (!cat.matches(search.trim(), nameRow.name, 'item')) return false
+      }
       return true
     })
-  }, [stock, kindFilter, categoryFilter, search, belowOnly, cat])
+  }, [rows, ownerRows, isOwner, kindFilter, categoryFilter, belowOnly, noGuestPrice, apartmentFilter, search, cat])
+
+  const summary = useMemo(() => {
+    const valRows: WarehouseValuationRow[] = filtered.map((r) => ({
+      scope: isOwner ? 'owner' : 'company',
+      owner_apartment_id: isOwner ? (r as MergedOwnerRow).apartment_id : null,
+      item_id: r.item_id,
+      on_hand: r.qty,
+      min_stock: r.min_stock,
+      avg_cost: r.avg_cost,
+      guest_price: r.guest_price,
+      stock_value: r.stock_value,
+      potential_revenue: null,
+      markup_pct: r.markup_pct,
+      margin_pct: r.margin_pct,
+    }))
+    return summarize(valRows)
+  }, [filtered, isOwner])
 
   const grouped = useMemo(() => {
-    const map = new Map<string, WarehouseStockRow[]>()
-    for (const s of filtered) {
-      const list = map.get(s.category) ?? []
-      list.push(s)
-      map.set(s.category, list)
+    if (isOwner) {
+      const map = new Map<number, { code: string; items: MergedOwnerRow[] }>()
+      for (const r of filtered as MergedOwnerRow[]) {
+        const entry = map.get(r.apartment_id) ?? { code: r.code, items: [] }
+        entry.items.push(r)
+        map.set(r.apartment_id, entry)
+      }
+      return Array.from(map.entries()).map(([id, entry]) => ({
+        key: String(id),
+        label: entry.code,
+        isOwnerGroup: true,
+        items: entry.items.sort((a, b) => a.name.localeCompare(b.name)),
+        subtotal: entry.items.reduce((sum, r) => sum + (r.stock_value ?? 0), 0),
+      }))
     }
-    return Array.from(map.entries()).map(([category, items]) => [category, [...items].sort((a, b) => Number(b.below_min) - Number(a.below_min) || a.name.localeCompare(b.name))] as const).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [filtered])
+    const map = new Map<string, MergedStockRow[]>()
+    for (const r of filtered as MergedStockRow[]) {
+      const list = map.get(r.category) ?? []
+      list.push(r)
+      map.set(r.category, list)
+    }
+    return Array.from(map.entries()).map(([category, items]) => ({
+      key: category,
+      label: cat.categoryName(category),
+      isOwnerGroup: false,
+      items: items.sort((a, b) => Number(b.below_min) - Number(a.below_min) || a.name.localeCompare(b.name)),
+      subtotal: null,
+    })).sort((a, b) => a.label.localeCompare(b.label))
+  }, [filtered, isOwner, cat])
 
   const ownerLocLabel = (location: StockMoveRow['from_location']) => {
     if (!location) return '—'
@@ -148,19 +244,50 @@ function CompanyStock() {
     loadMoves(itemId, 0, false)
   }
 
+  const toggleBelowMin = () => {
+    const params = new URLSearchParams(searchParams)
+    if (belowOnly) params.delete('below')
+    else params.set('below', '1')
+    setSearchParams(params, { replace: true })
+  }
+
+  const toggleNoGuestPrice = () => {
+    const params = new URLSearchParams(searchParams)
+    if (noGuestPrice) params.delete('noprice')
+    else params.set('noprice', '1')
+    setSearchParams(params, { replace: true })
+  }
+
   if (loading) {
     return <div className="px-4 pt-8 text-center text-muted">{t.app.loading}</div>
   }
 
+  if (error) {
+    return <ErrorState onRetry={() => loadData()} />
+  }
+
+  const stock = t.admin.stock
+  const showSummary = filtered.length > 0
+
   return (
     <>
+      {showSummary && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 mb-4">
+          <SummaryTile label={stock.positions} value={n(String(summary.positions))} />
+          <SummaryTile label={stock.stockValue} value={n(formatEGP(summary.totalStockValue))} />
+          <SummaryTile label={stock.potentialRevenue} value={n(formatEGP(summary.totalPotentialRevenue))} />
+          <SummaryTile label={stock.markup} value={formatPct(summary.weightedMarkupPct)} />
+          <SummaryTile label={stock.margin} value={formatPct(summary.weightedMarginPct)} />
+        </div>
+      )}
+
       <div className="flex gap-2.5 flex-wrap mb-3.5">
         <div className="relative flex-1 min-w-[140px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={t.admin.stock.search}
+            placeholder={stock.search}
             className="w-full bg-surface rounded-lg pl-10 pr-4 py-2 text-sm border border-line focus:border-accent focus:outline-none"
           />
         </div>
@@ -169,11 +296,23 @@ function CompanyStock() {
           onChange={(e) => setCategoryFilter(e.target.value)}
           className="bg-surface rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none"
         >
-          <option value="all">{t.admin.stock.allCategories}</option>
+          <option value="all">{stock.allCategories}</option>
           {categories.map((c) => (
             <option key={c} value={c}>{cat.categoryName(c)}</option>
           ))}
         </select>
+        {isOwner && (
+          <select
+            value={apartmentFilter}
+            onChange={(e) => setApartmentFilter(e.target.value)}
+            className="bg-surface rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none"
+          >
+            <option value="all">{stock.allApartments}</option>
+            {apartments.map((a) => (
+              <option key={a.id} value={String(a.id)}>{a.code}</option>
+            ))}
+          </select>
+        )}
         <div className="inline-flex bg-surface border border-line rounded-lg p-0.5">
           {(['all', 'assets', 'consumables'] as KindFilter[]).map((f) => (
             <button
@@ -183,63 +322,102 @@ function CompanyStock() {
                 kindFilter === f ? 'bg-accent text-white' : 'text-muted'
               }`}
             >
-              {f === 'all' ? t.admin.stock.all : f === 'assets' ? t.admin.stock.assets : t.admin.stock.consumables}
+              {f === 'all' ? stock.all : f === 'assets' ? stock.assets : stock.consumables}
             </button>
           ))}
         </div>
+        {!isOwner && (
+          <button
+            onClick={toggleBelowMin}
+            className={`px-3 py-2 rounded-lg text-sm border transition-colors ${belowOnly ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line'}`}
+          >
+            {stock.belowMin}
+          </button>
+        )}
+        <button
+          onClick={toggleNoGuestPrice}
+          className={`px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap ${noGuestPrice ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line'}`}
+        >
+          {stock.noGuestPrice}
+        </button>
       </div>
 
       <div className="space-y-5">
-        {grouped.map(([category, items]) => (
-          <div key={category}>
-            <h2 className="font-semibold text-sm text-ink mb-2 px-1">{cat.categoryName(category)}</h2>
-            <div className="bg-surface border border-line rounded-xl overflow-x-auto">
+        {grouped.map((group) => (
+          <div key={group.key}>
+            <div className="flex items-center gap-2 mb-2 px-1">
+              <h2 className="font-semibold text-sm text-ink">{group.label}</h2>
+              {group.isOwnerGroup && <OwnerBadge />}
+              {group.subtotal != null && group.subtotal > 0 && (
+                <span className="text-xs text-muted">{n(formatEGP(group.subtotal))}</span>
+              )}
+            </div>
+
+            {/* Desktop table */}
+            <div className="hidden md:block bg-surface border border-line rounded-xl overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
                   <tr>
-                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line">{t.admin.stock.title}</th>
-                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{t.common.balance} / {t.admin.stock.min}</th>
-                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line">{t.common.status}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line">{stock.title}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{t.common.balance} / {stock.min}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{stock.avgCost}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{stock.guestPrice}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{stock.markup}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{stock.margin}</th>
+                    <th className="text-left font-medium text-muted text-xs px-2.5 py-2 border-b border-line whitespace-nowrap">{stock.stockValue}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => {
-                    const expanded = expandedId === item.item_id
-                    const minPct = item.min_stock ? Math.min((item.qty / item.min_stock) * 100, 100) : 100
+                  {group.items.map((item) => {
+                    const expanded = !isOwner && expandedId === item.item_id
+                    const minPct = !isOwner && item.min_stock ? Math.min((item.qty / item.min_stock) * 100, 100) : 100
+                    const itemRow = item as MergedStockRow
                     return (
-                      <Fragment key={item.item_id}>
+                      <Fragment key={`${item.item_id}-${isOwner ? (item as MergedOwnerRow).apartment_id : ''}`}>
                         <tr
-                          onClick={() => toggleExpand(item.item_id)}
-                          className="cursor-pointer transition-colors hover:bg-app"
+                          onClick={() => !isOwner && toggleExpand(item.item_id)}
+                          className={!isOwner ? 'cursor-pointer transition-colors hover:bg-app' : ''}
                         >
                           <td className="px-2.5 py-2.5 border-b border-line">
-                            <span className="text-sm text-ink">{cat.itemName(item.name)}</span>
+                            <span className="text-sm text-ink">{cat.itemName(itemRow.name)}</span>
                           </td>
                           <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap" style={{ minWidth: '140px' }}>
-                            <span className={item.below_min ? 'text-bad' : 'text-ink'}>{n(formatQty(item.qty, item))}</span>
-                            <span className="text-muted text-xs"> / {item.min_stock != null ? n(formatQty(item.min_stock, item)) : '—'}</span>
-                            <ProgressBar value={minPct} color={item.below_min ? 'var(--bad)' : 'var(--ok)'} />
+                            <span className={itemRow.below_min ? 'text-bad' : 'text-ink'}>{n(formatQty(itemRow.qty, itemRow))}</span>
+                            {!isOwner && (
+                              <>
+                                <span className="text-muted text-xs"> / {itemRow.min_stock != null ? n(formatQty(itemRow.min_stock, itemRow)) : '—'}</span>
+                                <ProgressBar value={minPct} color={itemRow.below_min ? 'var(--bad)' : 'var(--ok)'} />
+                              </>
+                            )}
                           </td>
-                          <td className="px-2.5 py-2.5 border-b border-line">
-                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${
-                              item.below_min ? 'bg-bad-soft text-bad' : item.min_stock == null ? 'bg-app text-muted' : 'bg-ok-soft text-ok'
-                            }`}>
-                              {item.below_min ? t.admin.stock.belowMin : item.min_stock == null ? t.admin.stock.noMin : t.admin.dashboard.noToOrder}
-                            </span>
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
+                            {itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}
+                          </td>
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
+                            {itemRow.guest_price != null ? n(formatEGP(itemRow.guest_price)) : '—'}
+                          </td>
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
+                            {formatPct(itemRow.markup_pct)}
+                          </td>
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
+                            {formatPct(itemRow.margin_pct)}
+                          </td>
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
+                            {itemRow.stock_value != null ? n(formatEGP(itemRow.stock_value)) : '—'}
                           </td>
                         </tr>
                         {expanded && (
                           <tr>
-                            <td colSpan={3} className="px-2.5 py-3 border-b border-line bg-app">
-                              <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">{t.admin.stock.history}</div>
+                            <td colSpan={7} className="px-2.5 py-3 border-b border-line bg-app">
+                              <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">{stock.history}</div>
                               {movesLoading && moves.length === 0 ? (
                                 <div className="text-sm text-muted">{t.app.loading}</div>
                               ) : moves.length === 0 ? (
-                                <div className="text-sm text-muted">{t.admin.stock.noHistory}</div>
+                                <div className="text-sm text-muted">{stock.noHistory}</div>
                               ) : (
                                 <div className="space-y-2">
                                   {moves.map((m) => {
-                                    const sourceTypes = t.admin.stock.sourceTypes
+                                    const sourceTypes = stock.sourceTypes
                                     const sourceLabel = sourceTypes[m.source_type as keyof typeof sourceTypes] ?? m.source_type
                                     return (
                                       <div key={m.id} className="text-xs border-b border-line last:border-0 pb-2 last:pb-0">
@@ -254,17 +432,17 @@ function CompanyStock() {
                                                 <span className="text-muted">{m.owner_code}</span>
                                               </span>
                                             )}
-                                            {m.author && <span className="text-muted block">{t.admin.stock.author}: {m.author}</span>}
+                                            {m.author && <span className="text-muted block">{stock.author}: {m.author}</span>}
                                             {m.note && <span className="text-muted block">{m.note}</span>}
                                           </div>
-                                          <span className="text-muted shrink-0">{n(formatQty(m.qty, item))}</span>
+                                          <span className="text-muted shrink-0">{n(formatQty(m.qty, itemRow))}</span>
                                         </div>
                                       </div>
                                     )
                                   })}
                                   {hasMoreMoves && (
                                     <button onClick={() => loadMoves(item.item_id, movesOffset, true)} disabled={movesLoading} className="text-xs text-accent font-medium disabled:opacity-50">
-                                      {movesLoading ? t.app.loading : t.admin.stock.loadMore}
+                                      {movesLoading ? t.app.loading : stock.loadMore}
                                     </button>
                                   )}
                                 </div>
@@ -278,94 +456,97 @@ function CompanyStock() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden bg-surface border border-line rounded-xl divide-y divide-line">
+              {group.items.map((item) => {
+                const itemRow = item as MergedStockRow
+                const expanded = !isOwner && expandedId === item.item_id
+                return (
+                  <div key={`${item.item_id}-${isOwner ? (item as MergedOwnerRow).apartment_id : ''}`} className="px-3 py-3">
+                    <div
+                      onClick={() => !isOwner && toggleExpand(item.item_id)}
+                      className={!isOwner ? 'cursor-pointer' : ''}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className="text-sm text-ink font-medium">{cat.itemName(itemRow.name)}</span>
+                        <span className={`text-sm shrink-0 ${itemRow.below_min ? 'text-bad' : 'text-ink'}`}>
+                          {n(formatQty(itemRow.qty, itemRow))}
+                        </span>
+                      </div>
+                      {!isOwner && itemRow.min_stock != null && (
+                        <div className="mb-2">
+                          <span className="text-muted text-xs">/ {n(formatQty(itemRow.min_stock, itemRow))}</span>
+                          <div className="mt-1">
+                            <ProgressBar value={Math.min((itemRow.qty / itemRow.min_stock) * 100, 100)} color={itemRow.below_min ? 'var(--bad)' : 'var(--ok)'} />
+                          </div>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted">{stock.avgCost}</span>
+                          <span className="text-ink">{itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted">{stock.guestPrice}</span>
+                          <span className="text-ink">{itemRow.guest_price != null ? n(formatEGP(itemRow.guest_price)) : '—'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted">{stock.markup}</span>
+                          <span className="text-ink">{formatPct(itemRow.markup_pct)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted">{stock.margin}</span>
+                          <span className="text-ink">{formatPct(itemRow.margin_pct)}</span>
+                        </div>
+                        <div className="flex justify-between col-span-2">
+                          <span className="text-muted">{stock.stockValue}</span>
+                          <span className="text-ink">{itemRow.stock_value != null ? n(formatEGP(itemRow.stock_value)) : '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div className="mt-3 pt-3 border-t border-line">
+                        <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">{stock.history}</div>
+                        {movesLoading && moves.length === 0 ? (
+                          <div className="text-sm text-muted">{t.app.loading}</div>
+                        ) : moves.length === 0 ? (
+                          <div className="text-sm text-muted">{stock.noHistory}</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {moves.map((m) => {
+                              const sourceTypes = stock.sourceTypes
+                              const sourceLabel = sourceTypes[m.source_type as keyof typeof sourceTypes] ?? m.source_type
+                              return (
+                                <div key={m.id} className="text-xs border-b border-line last:border-0 pb-2 last:pb-0">
+                                  <span className="text-ink font-medium">{sourceLabel}</span>
+                                  <span className="text-muted block">{n(formatDateTime(m.moved_at))}</span>
+                                  <span className="text-muted block">{ownerLocLabel(m.from_location)} → {ownerLocLabel(m.to_location)}</span>
+                                  {m.note && <span className="text-muted block">{m.note}</span>}
+                                </div>
+                              )
+                            })}
+                            {hasMoreMoves && (
+                              <button onClick={() => loadMoves(item.item_id, movesOffset, true)} disabled={movesLoading} className="text-xs text-accent font-medium disabled:opacity-50">
+                                {movesLoading ? t.app.loading : stock.loadMore}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         ))}
         {grouped.length === 0 && (
-          <div className="bg-surface border border-line rounded-xl px-4 py-6 text-center text-muted text-sm">{t.common.noResults}</div>
+          <div className="bg-surface border border-line rounded-xl px-4 py-6 text-center text-muted text-sm">
+            {isOwner ? stock.ownerEmpty : t.common.noResults}
+          </div>
         )}
       </div>
-    </>
-  )
-}
-
-function OwnerStock() {
-  const { t, n } = useI18n()
-  const cat = useCatalogName()
-  const [stock, setStock] = useState<OwnerStockRow[]>([])
-  const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
-
-  const loadStock = useCallback((silent?: boolean) => {
-    const quiet = silent === true
-    if (!quiet) { setLoading(true); setError(false) }
-    fetchOwnerStock()
-      .then((data) => setStock(data))
-      .catch((e) => { if (!quiet) { setError(true); toast(errorMessage(e), 'error') } })
-      .finally(() => { if (!quiet) setLoading(false) })
-  }, [])
-
-  useEffect(() => { loadStock() }, [loadStock])
-  useLiveRefresh(['stock_moves', 'items', 'locations'], () => loadStock(true))
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return stock
-    return stock.filter((s) => s.code.toLowerCase().includes(q) || cat.matches(search.trim(), s.name, 'item'))
-  }, [stock, search, cat])
-
-  const grouped = useMemo(() => {
-    const map = new Map<number, { code: string; items: OwnerStockRow[] }>()
-    for (const s of filtered) {
-      const entry = map.get(s.apartment_id) ?? { code: s.code, items: [] }
-      entry.items.push(s)
-      map.set(s.apartment_id, entry)
-    }
-    return Array.from(map.entries()).map(([id, entry]) => ({ id, code: entry.code, items: entry.items }))
-  }, [filtered])
-
-  if (loading) {
-    return <div className="px-4 pt-8 text-center text-muted">{t.app.loading}</div>
-  }
-
-  if (error) {
-    return <ErrorState onRetry={() => loadStock()} />
-  }
-
-  return (
-    <>
-      <div className="relative mb-3.5">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t.admin.stock.search}
-          className="w-full bg-surface rounded-lg pl-10 pr-4 py-2 text-sm border border-line focus:border-accent focus:outline-none"
-        />
-      </div>
-
-      {grouped.length === 0 ? (
-        <div className="bg-surface border border-line rounded-xl px-4 py-6 text-center text-muted text-sm">{t.admin.stock.ownerEmpty}</div>
-      ) : (
-        <div className="space-y-5">
-          {grouped.map((group) => (
-            <div key={group.id}>
-              <div className="flex items-center gap-2 mb-2 px-1">
-                <h2 className="font-semibold text-sm text-ink">{group.code}</h2>
-                <OwnerBadge />
-              </div>
-              <div className="bg-surface border border-line rounded-xl overflow-hidden">
-                {group.items.map((item, i) => (
-                  <div key={item.item_id} className={`flex items-center justify-between px-3 py-3 ${i < group.items.length - 1 ? 'border-b border-line' : ''}`}>
-                    <span className="text-sm text-ink">{cat.itemName(item.name)}</span>
-                    <span className="text-sm text-muted shrink-0">{n(formatQty(item.qty, { base_unit: item.base_unit, pack_size: 1, pack_label: '' }))}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   )
 }
