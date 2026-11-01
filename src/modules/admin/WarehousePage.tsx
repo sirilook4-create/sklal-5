@@ -83,7 +83,7 @@ function SetCostModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" role="dialog" aria-modal="true" onClick={onClose}>
       <div
         className="bg-surface border border-line rounded-xl p-4 mx-4 max-w-sm w-full"
         onClick={(e) => e.stopPropagation()}
@@ -98,7 +98,7 @@ function SetCostModal({
           inputMode="decimal"
           disabled={saving}
           placeholder="0"
-          className="w-full bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-2"
+          className="w-full min-h-[44px] bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-2"
         />
         <p className="text-xs text-muted mb-3">{labels.explanation}</p>
         <input
@@ -106,7 +106,7 @@ function SetCostModal({
           onChange={(e) => setNote(e.target.value)}
           disabled={saving}
           placeholder={labels.note}
-          className="w-full bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-3"
+          className="w-full min-h-[44px] bg-app rounded-lg px-3 py-2 text-sm border border-line focus:border-accent focus:outline-none mb-3"
         />
         <div className="flex gap-2 justify-end">
           <button
