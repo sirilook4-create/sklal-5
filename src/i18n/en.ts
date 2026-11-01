@@ -437,6 +437,10 @@ export const en: Dict = {
       noGuestPrice: 'no guest price',
       allApartments: 'All apartments',
       valuationError: 'Failed to load stock valuation',
+      save: 'Save',
+      cancel: 'Cancel',
+      priceSaved: 'Price saved',
+      invalidPrice: 'Invalid price',
     },
     move: {
       title: 'New operation',

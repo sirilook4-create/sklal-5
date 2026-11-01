@@ -1,6 +1,6 @@
-import { Fragment, useState, useEffect, useMemo, useCallback } from 'react'
+import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock, fetchValuation } from '@/modules/admin/api'
+import { fetchWarehouseStock, fetchStockMoves, fetchOwnerStock, fetchValuation, setGuestPrice } from '@/modules/admin/api'
 import type { StockMoveRow, WarehouseValuationRow, ItemKind } from '@/lib/database.types'
 import { useI18n } from '@/i18n'
 import { formatQty, formatDateTime, formatEGP } from '@/lib/format'
@@ -12,6 +12,7 @@ import { ErrorState } from '@/components/ErrorState'
 import { useCatalogName } from '@/modules/core/useCatalogName'
 import { mergeCompany, mergeOwner, type MergedStockRow, type MergedOwnerRow } from './stockRows'
 import { summarize, formatPct } from './stockMetrics'
+import { parseGuestPrice } from './guestPrice'
 
 type KindFilter = 'all' | 'assets' | 'consumables'
 type StockTab = 'company' | 'owner'
@@ -29,6 +30,95 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
     <div className="bg-surface border border-line rounded-xl px-3 py-2.5">
       <div className="text-xs text-muted mb-0.5">{label}</div>
       <div className="text-sm font-semibold text-ink">{value}</div>
+    </div>
+  )
+}
+
+function GuestPriceCell({
+  itemId, guestPrice, onSave, saveLabel, cancelLabel, invalidPriceLabel, formatValue,
+}: {
+  itemId: number
+  guestPrice: number | null
+  onSave: (itemId: number, value: number | null) => Promise<void>
+  saveLabel: string
+  cancelLabel: string
+  invalidPriceLabel: string
+  formatValue: (v: number | null) => string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [input, setInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  const startEdit = () => {
+    setInput(guestPrice != null && guestPrice > 0 ? String(guestPrice) : '')
+    setEditing(true)
+  }
+
+  const handleSave = async () => {
+    if (saving) return
+    const parsed = parseGuestPrice(input)
+    if (!parsed.ok) {
+      toast(invalidPriceLabel, 'error')
+      return
+    }
+    setSaving(true)
+    try {
+      await onSave(itemId, parsed.value)
+      setEditing(false)
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); startEdit() }}
+        className="text-sm text-ink hover:text-accent transition-colors"
+      >
+        {formatValue(guestPrice)}
+      </button>
+    )
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); handleSave() }
+          if (e.key === 'Escape') setEditing(false)
+        }}
+        inputMode="decimal"
+        disabled={saving}
+        className="w-20 bg-app rounded-lg px-2 py-1.5 text-sm border border-accent focus:outline-none"
+      />
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className="min-h-[44px] px-3 rounded-lg text-xs font-medium bg-accent text-white disabled:opacity-50"
+      >
+        {saveLabel}
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditing(false)}
+        disabled={saving}
+        className="min-h-[44px] px-3 rounded-lg text-xs font-medium bg-surface border border-line text-muted disabled:opacity-50"
+      >
+        {cancelLabel}
+      </button>
     </div>
   )
 }
@@ -132,6 +222,15 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
 
   useEffect(() => { loadData() }, [loadData])
   useLiveRefresh(['stock_moves', 'items', 'locations'], () => loadData(true))
+
+  const handleGuestPriceSave = useCallback(async (itemId: number, value: number | null) => {
+    await setGuestPrice(itemId, value)
+    toast(t.admin.stock.priceSaved, 'success')
+    loadData(true)
+  }, [loadData, t])
+
+  const formatGuestPriceDisplay = (v: number | null) =>
+    v != null && v > 0 ? n(formatEGP(v)) : '—'
 
   const apartments = useMemo(() => {
     if (!isOwner) return []
@@ -396,8 +495,16 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
                           <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
                             {itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}
                           </td>
-                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
-                            {itemRow.guest_price != null ? n(formatEGP(itemRow.guest_price)) : '—'}
+                          <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                            <GuestPriceCell
+                              itemId={item.item_id}
+                              guestPrice={itemRow.guest_price}
+                              onSave={handleGuestPriceSave}
+                              saveLabel={stock.save}
+                              cancelLabel={stock.cancel}
+                              invalidPriceLabel={stock.invalidPrice}
+                              formatValue={formatGuestPriceDisplay}
+                            />
                           </td>
                           <td className="px-2.5 py-2.5 border-b border-line whitespace-nowrap text-sm text-ink">
                             {formatPct(itemRow.markup_pct)}
@@ -491,16 +598,24 @@ function StockView({ scope }: { scope: 'company' | 'owner' }) {
                           <span className="text-ink">{itemRow.avg_cost != null ? n(formatEGP(itemRow.avg_cost)) : '—'}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted">{stock.guestPrice}</span>
-                          <span className="text-ink">{itemRow.guest_price != null ? n(formatEGP(itemRow.guest_price)) : '—'}</span>
-                        </div>
-                        <div className="flex justify-between">
                           <span className="text-muted">{stock.markup}</span>
                           <span className="text-ink">{formatPct(itemRow.markup_pct)}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted">{stock.margin}</span>
                           <span className="text-ink">{formatPct(itemRow.margin_pct)}</span>
+                        </div>
+                        <div className="flex justify-between items-center col-span-2" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-muted">{stock.guestPrice}</span>
+                          <GuestPriceCell
+                            itemId={item.item_id}
+                            guestPrice={itemRow.guest_price}
+                            onSave={handleGuestPriceSave}
+                            saveLabel={stock.save}
+                            cancelLabel={stock.cancel}
+                            invalidPriceLabel={stock.invalidPrice}
+                            formatValue={formatGuestPriceDisplay}
+                          />
                         </div>
                         <div className="flex justify-between col-span-2">
                           <span className="text-muted">{stock.stockValue}</span>

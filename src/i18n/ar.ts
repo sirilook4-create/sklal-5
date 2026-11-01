@@ -438,6 +438,10 @@ export const ar: Dict = {
       noGuestPrice: 'بدون سعر نزيل',
       allApartments: 'كل الشقق',
       valuationError: 'تعذّر تحميل تقييم المخزن',
+      save: 'حفظ',
+      cancel: 'إلغاء',
+      priceSaved: 'تم حفظ السعر',
+      invalidPrice: 'سعر غير صحيح',
     },
     move: {
       title: 'عملية جديدة',

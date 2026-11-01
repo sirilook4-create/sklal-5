@@ -435,6 +435,10 @@ export const ru = {
       noGuestPrice: 'без цены для гостя',
       allApartments: 'Все квартиры',
       valuationError: 'Не удалось загрузить оценку склада',
+      save: 'Сохранить',
+      cancel: 'Отмена',
+      priceSaved: 'Цена сохранена',
+      invalidPrice: 'Неверная цена',
     },
     move: {
       title: 'Новая операция',
