@@ -30,12 +30,26 @@ describe('parseGuestPrice', () => {
     expect(parseGuestPrice('  12.5  ')).toEqual({ ok: true, value: 12.5 })
   })
 
-  it('rounds to 2 decimal places (up)', () => {
-    expect(parseGuestPrice('12.567')).toEqual({ ok: true, value: 12.57 })
+  it('accepts two decimal places', () => {
+    expect(parseGuestPrice('12.57')).toEqual({ ok: true, value: 12.57 })
+    expect(parseGuestPrice('12,50')).toEqual({ ok: true, value: 12.5 })
   })
 
-  it('rounds to 2 decimal places (down)', () => {
-    expect(parseGuestPrice('12.564')).toEqual({ ok: true, value: 12.56 })
+  it('rejects three or more decimal digits', () => {
+    expect(parseGuestPrice('12.567')).toEqual({ ok: false })
+    expect(parseGuestPrice('12.564')).toEqual({ ok: false })
+  })
+
+  it('rejects ambiguous thousands separators instead of saving a wrong price', () => {
+    expect(parseGuestPrice('1,500')).toEqual({ ok: false })
+    expect(parseGuestPrice('1.500')).toEqual({ ok: false })
+    expect(parseGuestPrice('15,000')).toEqual({ ok: false })
+  })
+
+  it('accepts Arabic-Indic digits and the Arabic decimal separator', () => {
+    expect(parseGuestPrice('\u0663\u0665\u0660')).toEqual({ ok: true, value: 350 })
+    expect(parseGuestPrice('\u0661\u0662\u066B\u0665')).toEqual({ ok: true, value: 12.5 })
+    expect(parseGuestPrice('\u06F1\u06F2')).toEqual({ ok: true, value: 12 })
   })
 
   it('rejects negative', () => {
