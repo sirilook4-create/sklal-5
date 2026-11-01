@@ -106,7 +106,7 @@ begin
 
   -- V11 приход и выдача товара без поштучного учёта работают как раньше
   v_mv11 := post_move(p_op => 'receipt', p_item => v_plain, p_qty => 2, p_unit_cost => 4);
-  post_move(p_op => 'issue_apartment', p_item => v_plain, p_qty => 1, p_apartment => v_apt);
+  perform post_move(p_op => 'issue_apartment', p_item => v_plain, p_qty => 1, p_apartment => v_apt);
   select qty into v_bal from stock_balance where loc_id = v_wh and item_id = v_plain;
   rep := rep || pg_temp.r('V11 приход 2 шт и выдача 1 шт товара без учёта: на складе 1', v_bal = 1);
   select count(*) into v_cnt from stock_balance where loc_id = v_apt_loc and item_id = v_plain and qty = 1;
